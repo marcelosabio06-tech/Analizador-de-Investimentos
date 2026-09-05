@@ -1,4 +1,3 @@
-
 import pandas as pd
 import streamlit as st
 import ta
@@ -11,7 +10,7 @@ st.set_page_config(
 
 st.title("📈 Analisador de Ações da B3 para Swing Trade")
 st.markdown(
-    "Insira até 3 tickers da B3 para analisar os indicadores técnicos e fundamentalistas de forma simultânea."
+    "Insira os tickers das ações da B3 abaixo para visualizar a análise técnica e operacional em tempo real."
 )
 
 # Painel Lateral para Entrada de Ativos
@@ -23,121 +22,133 @@ ticker_3 = st.sidebar.text_input("Ação 3", "ITUB4")
 tickers_selecionados = [ticker_1, ticker_2, ticker_3]
 
 
+@st.cache_data(ttl=3600)  # Evita bloqueio no yfinance guardando cache por 1h
+def carregar_dados(ticker_symbol):
+    ativo = yf.Ticker(ticker_symbol)
+    return ativo.history(period="1y")
+
+
 def analisar_ativo(ticker_user):
     ticker_symbol = ticker_user.strip().upper()
+    if not ticker_symbol:
+        return None
+
     if not ticker_symbol.endswith(".SA"):
         ticker_symbol += ".SA"
 
-    ativo = yf.Ticker(ticker_symbol)
-    hist = ativo.history(period="1y")
+    try:
+        hist = carregar_dados(ticker_symbol)
 
-    if hist.empty or len(hist) < 200:
-        return {"erro": f"Dados insuficientes para {ticker_symbol}."}
+        if hist.empty or len(hist) < 200:
+            return {"erro": f"Dados insuficientes ou ticker inválido: {ticker_symbol}"}
 
-    df = hist.copy()
+        df = hist.copy()
 
-    # Indicadores Técnicos
-    df["MME21"] = df["Close"].ewm(span=21, adjust=False).mean()
-    df["MMS200"] = df["Close"].rolling(window=200).mean()
+        # Indicadores Técnicos
+        df["MME21"] = df["Close"].ewm(span=21, adjust=False).mean()
+        df["MMS200"] = df["Close"].rolling(window=200).mean()
 
-    # IFR 14
-    delta = df["Close"].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df["RSI14"] = 100 - (100 / (1 + rs))
+        # IFR 14
+        delta = df["Close"].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df["RSI14"] = 100 - (100 / (1 + rs))
 
-    # MACD
-    exp1 = df["Close"].ewm(span=12, adjust=False).mean()
-    exp2 = df["Close"].ewm(span=26, adjust=False).mean()
-    df["MACD_Line"] = exp1 - exp2
-    df["MACD_Signal"] = df["MACD_Line"].ewm(span=9, adjust=False).mean()
-    df["MACD_Hist"] = df["MACD_Line"] - df["MACD_Signal"]
+        # MACD
+        exp1 = df["Close"].ewm(span=12, adjust=False).mean()
+        exp2 = df["Close"].ewm(span=26, adjust=False).mean()
+        df["MACD_Line"] = exp1 - exp2
+        df["MACD_Signal"] = df["MACD_Line"].ewm(span=9, adjust=False).mean()
+        df["MACD_Hist"] = df["MACD_Line"] - df["MACD_Signal"]
 
-    # Volume
-    df["Vol_Media_20"] = df["Volume"].rolling(window=20).mean()
+        # Volume
+        df["Vol_Media_20"] = df["Volume"].rolling(window=20).mean()
 
-    atual = df.iloc[-1]
-    anterior = df.iloc[-2]
+        atual = df.iloc[-1]
+        anterior = df.iloc[-2]
 
-    preco_atual = atual["Close"]
-    mme21 = atual["MME21"]
-    mms200 = atual["MMS200"]
-    rsi14 = atual["RSI14"]
-    macd_line = atual["MACD_Line"]
-    macd_signal = atual["MACD_Signal"]
-    macd_hist = atual["MACD_Hist"]
-    macd_hist_ant = anterior["MACD_Hist"]
-    vol_atual = atual["Volume"]
-    vol_media = atual["Vol_Media_20"]
+        preco_atual = atual["Close"]
+        mme21 = atual["MME21"]
+        mms200 = atual["MMS200"]
+        rsi14 = atual["RSI14"]
+        macd_line = atual["MACD_Line"]
+        macd_signal = atual["MACD_Signal"]
+        macd_hist = atual["MACD_Hist"]
+        macd_hist_ant = anterior["MACD_Hist"]
+        vol_atual = atual["Volume"]
+        vol_media = atual["Vol_Media_20"]
 
-    # Avaliações
-    pontos = 0
-    total = 5
-    detalhes = []
+        # Avaliações
+        pontos = 0
+        total = 5
+        detalhes = []
 
-    # Regra 1: MMS 200
-    if preco_atual > mms200:
-        pontos += 1
-        detalhes.append(
-            f"✅ **MMS 200:** Preço (R$ {preco_atual:.2f}) acima da MMS200 (R$ {mms200:.2f})"
-        )
-    else:
-        detalhes.append(
-            f"❌ **MMS 200:** Preço (R$ {preco_atual:.2f}) abaixo da MMS200 (R$ {mms200:.2f})"
-        )
+        # Regra 1: MMS 200
+        if preco_atual > mms200:
+            pontos += 1
+            detalhes.append(
+                f"✅ **MMS 200:** Preço (R$ {preco_atual:.2f}) acima da MMS200 (R$ {mms200:.2f})"
+            )
+        else:
+            detalhes.append(
+                f"❌ **MMS 200:** Preço (R$ {preco_atual:.2f}) abaixo da MMS200 (R$ {mms200:.2f})"
+            )
 
-    # Regra 2: MME 21
-    if preco_atual >= mme21:
-        pontos += 1
-        detalhes.append(
-            f"✅ **MME 21:** Preço acima da MME21 (R$ {mme21:.2f})"
-        )
-    else:
-        detalhes.append(
-            f"⚠️ **MME 21:** Preço abaixo da MME21 (R$ {mme21:.2f})"
-        )
+        # Regra 2: MME 21
+        if preco_atual >= mme21:
+            pontos += 1
+            detalhes.append(
+                f"✅ **MME 21:** Preço acima da MME21 (R$ {mme21:.2f})"
+            )
+        else:
+            detalhes.append(
+                f"⚠️ **MME 21:** Preço abaixo da MME21 (R$ {mme21:.2f})"
+            )
 
-    # Regra 3: IFR
-    if 30 <= rsi14 <= 55:
-        pontos += 1
-        detalhes.append(f"✅ **IFR 14:** Nível ideal em {rsi14:.1f}")
-    elif rsi14 > 70:
-        detalhes.append(f"❌ **IFR 14:** Sobrecomprado ({rsi14:.1f})")
-    else:
-        detalhes.append(f"⚠️ **IFR 14:** Nível em {rsi14:.1f}")
+        # Regra 3: IFR
+        if 30 <= rsi14 <= 55:
+            pontos += 1
+            detalhes.append(f"✅ **IFR 14:** Nível ideal em {rsi14:.1f}")
+        elif rsi14 > 70:
+            detalhes.append(f"❌ **IFR 14:** Sobrecomprado ({rsi14:.1f})")
+        else:
+            detalhes.append(f"⚠️ **IFR 14:** Nível em {rsi14:.1f}")
 
-    # Regra 4: MACD
-    if macd_line > macd_signal and macd_hist > macd_hist_ant:
-        pontos += 1
-        detalhes.append("✅ **MACD:** Cruzamento altista ativo")
-    else:
-        detalhes.append("❌ **MACD:** Sem força compradora no momento")
+        # Regra 4: MACD
+        if macd_line > macd_signal and macd_hist > macd_hist_ant:
+            pontos += 1
+            detalhes.append("✅ **MACD:** Cruzamento altista ativo")
+        else:
+            detalhes.append("❌ **MACD:** Sem força compradora no momento")
 
-    # Regra 5: Volume
-    if vol_atual >= vol_media:
-        pontos += 1
-        detalhes.append("✅ **Volume:** Acima da média de 20 dias")
-    else:
-        detalhes.append("⚠️ **Volume:** Abaixo da média de 20 dias")
+        # Regra 5: Volume
+        if vol_atual >= vol_media:
+            pontos += 1
+            detalhes.append("✅ **Volume:** Acima da média de 20 dias")
+        else:
+            detalhes.append("⚠️ **Volume:** Abaixo da média de 20 dias")
 
-    return {
-        "Ticker": ticker_symbol.replace(".SA", ""),
-        "Preço": f"R$ {preco_atual:.2f}",
-        "Pontuação": f"{pontos}/{total}",
-        "Percentual": (pontos / total) * 100,
-        "Detalhes": detalhes,
-        "Hist": df,
-    }
+        return {
+            "Ticker": ticker_symbol.replace(".SA", ""),
+            "Preço": f"R$ {preco_atual:.2f}",
+            "Pontuação": f"{pontos}/{total}",
+            "Percentual": (pontos / total) * 100,
+            "Detalhes": detalhes,
+            "Hist": df,
+        }
+    except Exception as e:
+        return {"erro": f"Erro ao consultar {ticker_symbol}: {str(e)}"}
 
 
-if st.sidebar.button("Analisar Ativos"):
-    cols = st.columns(3)
+# Execução automática da análise sem depender do clique de botão
+cols = st.columns(3)
 
-    for idx, ticker in enumerate(tickers_selecionados):
-        if ticker.strip():
-            res = analisar_ativo(ticker)
+for idx, ticker in enumerate(tickers_selecionados):
+    if ticker.strip():
+        res = analisar_ativo(ticker)
 
+        if res:
             with cols[idx]:
                 if "erro" in res:
                     st.error(res["erro"])
@@ -164,5 +175,5 @@ if st.sidebar.button("Analisar Ativos"):
                     for d in res["Detalhes"]:
                         st.markdown(d)
 
-                    # Gráfico simples de fechamento com MME21
+                    # Gráfico de Fechamento com MME21
                     st.line_chart(res["Hist"][["Close", "MME21"]].tail(60))
