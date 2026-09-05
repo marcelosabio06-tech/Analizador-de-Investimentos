@@ -10,39 +10,44 @@ st.set_page_config(
 
 st.title("📈 Analisador de Ações da B3 para Swing Trade")
 st.markdown(
-    "Insira os tickers das ações da B3 abaixo para visualizar a análise técnica e operacional em tempo real."
+    "Digite os códigos das ações abaixo e clique no botão para executar uma nova análise."
 )
 
-# Painel Lateral para Entrada de Ativos
-st.sidebar.header("Parâmetros de Entrada")
-ticker_1 = st.sidebar.text_input("Ação 1", "PETR4")
-ticker_2 = st.sidebar.text_input("Ação 2", "VALE3")
-ticker_3 = st.sidebar.text_input("Ação 3", "ITUB4")
+# Formulário na barra lateral para travar o envio dos novos tickers
+with st.sidebar.form(key="form_tickers"):
+    st.header("Parâmetros de Entrada")
+    ticker_1 = st.text_input("Ação 1", value="PETR4")
+    ticker_2 = st.text_input("Ação 2", value="VALE3")
+    ticker_3 = st.text_input("Ação 3", value="ITUB4")
 
-tickers_selecionados = [ticker_1, ticker_2, ticker_3]
-
-
-@st.cache_data(ttl=3600)  # Evita bloqueio no yfinance guardando cache por 1h
-def carregar_dados(ticker_symbol):
-    ativo = yf.Ticker(ticker_symbol)
-    return ativo.history(period="1y")
+    # Botão do formulário
+    btn_submeter = st.form_submit_button("🚀 Analisar Novos Ativos")
 
 
 def analisar_ativo(ticker_user):
-    ticker_symbol = ticker_user.strip().upper()
-    if not ticker_symbol:
+    ticker_clean = ticker_user.strip().upper()
+    if not ticker_clean:
         return None
 
-    if not ticker_symbol.endswith(".SA"):
-        ticker_symbol += ".SA"
+    if not ticker_clean.endswith(".SA"):
+        ticker_symbol = ticker_clean + ".SA"
+    else:
+        ticker_symbol = ticker_clean
 
     try:
-        hist = carregar_dados(ticker_symbol)
+        # Força o download atualizado ignorando o cache interno
+        hist = yf.download(ticker_symbol, period="1y", progress=False)
 
         if hist.empty or len(hist) < 200:
-            return {"erro": f"Dados insuficientes ou ticker inválido: {ticker_symbol}"}
+            return {
+                "erro": f"Dados insuficientes ou ticker não encontrado: {ticker_clean}"
+            }
 
-        df = hist.copy()
+        # Trata coluna de preços para séries do yfinance
+        if isinstance(hist.columns, pd.MultiIndex):
+            df = hist.xs(ticker_symbol, level=1, axis=1).copy()
+        else:
+            df = hist.copy()
 
         # Indicadores Técnicos
         df["MME21"] = df["Close"].ewm(span=21, adjust=False).mean()
@@ -68,16 +73,16 @@ def analisar_ativo(ticker_user):
         atual = df.iloc[-1]
         anterior = df.iloc[-2]
 
-        preco_atual = atual["Close"]
-        mme21 = atual["MME21"]
-        mms200 = atual["MMS200"]
-        rsi14 = atual["RSI14"]
-        macd_line = atual["MACD_Line"]
-        macd_signal = atual["MACD_Signal"]
-        macd_hist = atual["MACD_Hist"]
-        macd_hist_ant = anterior["MACD_Hist"]
-        vol_atual = atual["Volume"]
-        vol_media = atual["Vol_Media_20"]
+        preco_atual = float(atual["Close"])
+        mme21 = float(atual["MME21"])
+        mms200 = float(atual["MMS200"])
+        rsi14 = float(atual["RSI14"])
+        macd_line = float(atual["MACD_Line"])
+        macd_signal = float(atual["MACD_Signal"])
+        macd_hist = float(atual["MACD_Hist"])
+        macd_hist_ant = float(anterior["MACD_Hist"])
+        vol_atual = float(atual["Volume"])
+        vol_media = float(atual["Vol_Media_20"])
 
         # Avaliações
         pontos = 0
@@ -130,7 +135,7 @@ def analisar_ativo(ticker_user):
             detalhes.append("⚠️ **Volume:** Abaixo da média de 20 dias")
 
         return {
-            "Ticker": ticker_symbol.replace(".SA", ""),
+            "Ticker": ticker_clean,
             "Preço": f"R$ {preco_atual:.2f}",
             "Pontuação": f"{pontos}/{total}",
             "Percentual": (pontos / total) * 100,
@@ -138,13 +143,15 @@ def analisar_ativo(ticker_user):
             "Hist": df,
         }
     except Exception as e:
-        return {"erro": f"Erro ao consultar {ticker_symbol}: {str(e)}"}
+        return {"erro": f"Erro ao processar {ticker_clean}: {str(e)}"}
 
 
-# Execução automática da análise sem depender do clique de botão
+# A análise roda sempre que o botão do formulário for clicado ou na abertura inicial
+tickers_para_analisar = [ticker_1, ticker_2, ticker_3]
+
 cols = st.columns(3)
 
-for idx, ticker in enumerate(tickers_selecionados):
+for idx, ticker in enumerate(tickers_para_analisar):
     if ticker.strip():
         res = analisar_ativo(ticker)
 
@@ -156,7 +163,6 @@ for idx, ticker in enumerate(tickers_selecionados):
                     st.subheader(f"📌 {res['Ticker']}")
                     st.metric("Preço Atual", res["Preço"])
 
-                    # Veredito Visual
                     perc = res["Percentual"]
                     if perc >= 80:
                         st.success(
@@ -175,5 +181,4 @@ for idx, ticker in enumerate(tickers_selecionados):
                     for d in res["Detalhes"]:
                         st.markdown(d)
 
-                    # Gráfico de Fechamento com MME21
                     st.line_chart(res["Hist"][["Close", "MME21"]].tail(60))
